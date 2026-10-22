@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes">
+  <title>Колонны Бласт Самоцветы</title>
+
+  <!--
+    SDK Игр ВКонтакте. Глобал зовётся vkBridge, но работать надо через vkBridge.default —
+    это UMD-сборка пакета.
+
+    Файл лежит РЯДОМ, в сборке, а не грузится с чужого CDN. Правила ВК про рекламу говорят:
+    «Интегрироваться с другими рекламными сетями, а также использовать сторонний код для
+    показа нельзя». Библиотека своя, вкашная, но брать её с постороннего узла — лишний повод
+    к вопросам, да и лишняя точка отказа: не ответил CDN, и игра осталась без рекламы и
+    без языка.
+
+    Вся работа с SDK живёт ЗДЕСЬ, а не в мосте. Мост (Assets/Plugins/WebGL/VkBridge.jslib)
+    только зовёт эти функции. У Яндекса (Assets/WebGLTemplates/Yandex/index.html) наоборот:
+    там страница лишь подключает скрипт SDK, а разговаривает с ним мост. Яндексов шаблон
+    оставлен на месте нетронутым — он собирает версию игры из соседней папки «Columns WEBGL».
+  -->
+  <script src="vk-bridge.umd.js"></script>
+
+  <style>
+    :root {
+      --stone: #14100C;
+      --stone-light: #2A2019;
+      --gold: #D2A052;
+      --gold-bright: #F2D398;
+      --text-dim: #B2A08C;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--stone);
+      color: var(--text-dim);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #unity-container {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(120% 90% at 50% 0%, #241A13 0%, rgba(36,26,19,0) 65%),
+        var(--stone);
+    }
+
+    /* Размер канваса задаёт скрипт: игра портретная, и на широком экране её надо
+       держать пропорциями, а не растягивать. Здесь только то, что от размера не зависит. */
+    #unity-canvas {
+      display: block;
+      background: var(--stone);
+      touch-action: none;
+    }
+
+    #unity-loading {
+      position: absolute;
+      inset: 0;
+      /* Экран загрузки чёрный: на нём не видно, как подгружается фон игры. */
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      z-index: 10;
+      transition: opacity 320ms ease;
+    }
+
+    #unity-loading.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Кольцо-крутилка: тонкая дуга бежит по кругу, пока грузится игра. */
+    #unity-spinner {
+      width: 84px;
+      height: 84px;
+      border-radius: 50%;
+      border: 5px solid rgba(210, 160, 82, 0.18);
+      border-top-color: var(--gold);
+      border-right-color: var(--gold-bright);
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Тем, кому анимация мешает, показываем спокойное мерцание вместо вращения. */
+    @media (prefers-reduced-motion: reduce) {
+      #unity-spinner {
+        animation: pulse 1.6s ease-in-out infinite;
+        border-top-color: var(--gold);
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 0.35; }
+        50% { opacity: 1; }
+      }
+    }
+
+    #unity-percent {
+      font-size: 15px;
+      letter-spacing: 0.12em;
+      color: var(--gold);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #unity-loading .title {
+      font-size: 30px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--gold-bright);
+      font-weight: 600;
+    }
+
+    #unity-progress-track {
+      width: min(64vw, 320px);
+      height: 6px;
+      border-radius: 3px;
+      background: var(--stone-light);
+      overflow: hidden;
+    }
+
+    #unity-progress-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--gold) 0%, var(--gold-bright) 100%);
+      transition: width 160ms ease;
+    }
+
+    #unity-loading .hint {
+      font-size: 13px;
+      letter-spacing: 0.08em;
+    }
+
+    #unity-error {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      z-index: 20;
+      background: var(--stone);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #unity-progress-fill, #unity-loading { transition: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="unity-container">
+    <canvas id="unity-canvas" tabindex="-1"></canvas>
+
+    <div id="unity-loading">
+      <div id="unity-spinner"></div>
+      <div id="unity-percent">0%</div>
+    </div>
+
+    <div id="unity-error">
+      Не удалось запустить игру. Обновите страницу или откройте её в другом браузере.
+    </div>
+  </div>
+
+  <script src="Build/WebGL.loader.js"></script>
+  <script>
+    (function () {
+      var canvas = document.querySelector("#unity-canvas");
+      var loading = document.querySelector("#unity-loading");
+      var percent = document.querySelector("#unity-percent");
+      var errorBox = document.querySelector("#unity-error");
+
+      var config = {
+        dataUrl: "Build/WebGL.data.unityweb",
+        frameworkUrl: "Build/WebGL.framework.js.unityweb",
+        codeUrl: "Build/WebGL.wasm.unityweb",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "cbycsoft",
+        productName: "Колонны Бласт Самоцветы",
+        productVersion: "2.0",
+        matchWebGLToCanvasSize: true,
+
+
+        // Логи игры в консоль браузера. Без этих двух строк вывод Unity глотается
+        // на полпути, и разбираться в поведении собранной игры нечем: в консоли видно
+        // только служебные сообщения самого движка, а Debug.Log из игры не доходит.
+        print: function (message) { console.log(message); },
+        printErr: function (message) { console.error(message); }
+      };
+
+      // Игра нарисована под портрет 1080×1920, и интерфейс масштабируется по ширине окна.
+      // Если отдать канвасу всё окно на настольном экране, ширина делится на 1080 —
+      // и на широком мониторе всё раздувается: поле уезжает вширь, надписи лезут на камни.
+      //
+      // Поэтому ширина ограничена пропорцией игры, а по бокам остаётся фон страницы.
+      // Окно уже этой пропорции (телефон, планшет в портрете) забирает всё место как было:
+      // такие экраны игра держит с самого начала, она под них и сделана.
+      var GameAspect = 1080 / 1920;
+
+      function resize() {
+        var width = window.innerWidth;
+        var height = window.innerHeight;
+
+        // **Нулевой размер НЕ ставим.** ВК открывает игру в кадре, и кадр может ещё
+        // не иметь размера: его создали скрытым, вкладку открыли в фоне. Расчёт тогда
+        // даёт 0×0, а события resize при появлении размера может и не быть — канвас
+        // остался бы нулевым навсегда. Выглядит это чёрным экраном без единой ошибки
+        // в консоли, и на другом ВК-проекте поймано ровно так: окно 1280×720,
+        // канвас 0×0. У Яндекса страница открывается не в кадре, и этой беды не было.
+        if (width < 1 || height < 1) {
+          return;
+        }
+
+        if (width / height > GameAspect) {
+          width = Math.floor(height * GameAspect);
+        }
+
+        // Размер на странице — в пикселях CSS, размер картинки — в настоящих точках
+        // экрана: без множителя плотности на телефонах и ретине игра выглядит мылом.
+        //
+        // Сверху множитель ограничен двойкой. На телефоне с плотностью 3 игра рисовала бы
+        // втрое больше точек, чем занимает на странице, — это чистая работа видеоядра
+        // и нагрев в руках. Разницу между двойной и тройной плотностью на крупных
+        // нарисованных камнях глаз не ловит, а тепло ловит рука.
+        var density = Math.min(window.devicePixelRatio || 1, 2);
+
+        canvas.style.width = width + "px";
+        canvas.style.height = height + "px";
+        canvas.width = Math.floor(width * density);
+        canvas.height = Math.floor(height * density);
+      }
+
+      // Сюда же зовёт мост при возврате из скрытия (VKWebAppViewRestore).
+      window.vkFit = resize;
+
+      window.addEventListener("resize", resize);
+
+      // Размер кадра меняется и БЕЗ события resize — наблюдатель ловит это, когда окно
+      // о себе молчит. Он и есть главная страховка; ниже две дешёвые на случай,
+      // если его в браузере нет.
+      if (typeof ResizeObserver === "function") {
+        new ResizeObserver(resize).observe(document.documentElement);
+      }
+
+      document.addEventListener("visibilitychange", resize);
+      window.addEventListener("pageshow", resize);
+
+      resize();
+
+      createUnityInstance(canvas, config, function (progress) {
+        percent.textContent = Math.round(progress * 100) + "%";
+      }).then(function (instance) {
+        window.unityInstance = instance;
+        loading.classList.add("hidden");
+        setTimeout(function () { loading.style.display = "none"; }, 340);
+
+        // Отдать ответы площадки, пришедшие, пока игра была недосягаема.
+        if (typeof window.vkFlushAnswers === "function") window.vkFlushAnswers();
+      }).catch(function (message) {
+        console.error(message);
+        loading.style.display = "none";
+        errorBox.style.display = "flex";
+      });
+    })();
+  </script>
+
+  <script>
+    // ===== Мост с площадкой =====
+    //
+    // Ответы уходят в игру на объект VkPlatform, имена методов зашиты в VkPlatform.cs.
+
+    (function () {
+      var ANSWER_OBJECT = "VkPlatform";
+      var INIT_TIMEOUT = 4000;
+
+      // Как часто перепроверять наличие рекламных материалов. Полминуты — достаточно
+      // редко, чтобы не донимать площадку, и достаточно часто, чтобы материалы успели
+      // подъехать к первой просьбе: спешл-камень и «продолжить» случаются не на первых
+      // секундах партии.
+      var CHECK_EVERY = 30000;
+
+      // Ждущая просьба. Ровно одна: игра не просит второй ролик, пока идёт первый —
+      // показ всегда идёт из паузы, а из паузы просить нечем.
+      var pending = null;
+
+      // Ответы, которые пришли раньше, чем игра стала досягаема.
+      //
+      // Мост заводится из Start() первой сцены, а window.unityInstance присваивается
+      // позже — когда загрузчик Unity доведёт свой промис. В этот зазор попадает ответ
+      // SDK об инициализации, а с ним язык площадки и разрешение показывать рекламу.
+      // Потерянный здесь ответ не виден никак: игра просто навсегда остаётся
+      // «без площадки». Поэтому копим и отдаём, когда игра появится.
+      var queue = [];
+
+      function answer(method, value) {
+        if (!window.unityInstance || !window.unityInstance.SendMessage) {
+          queue.push([method, value || ""]);
+          return;
+        }
+
+        try {
+          window.unityInstance.SendMessage(ANSWER_OBJECT, method, value || "");
+        } catch (error) {
+          console.warn("Coloomns: не удалось ответить в игру", error);
+        }
+      }
+
+      // Зовётся загрузчиком, как только игра досягаема.
+      window.vkFlushAnswers = function () {
+        var waiting = queue;
+        queue = [];
+
+        for (var i = 0; i < waiting.length; i++) {
+          answer(waiting[i][0], waiting[i][1]);
+        }
+      };
+
+      function bridge() {
+        return (typeof vkBridge !== "undefined" && vkBridge) ? vkBridge.default : null;
+      }
+
+      // Закрыть ждущую просьбу — ровно один раз.
+      function finish(ok) {
+        if (!pending) return;
+
+        var kind = pending;
+        pending = null;
+
+        if (kind === "interstitial") answer("OnFullscreenClosed", "");
+        else answer(ok ? "OnRewardedSuccess" : "OnRewardedFailed", "");
+
+        // После показа SDK сам запрашивает новую порцию материалов, но знать, приехала ли
+        // она, игра должна от нас: иначе кнопка бонуса осталась бы в том состоянии,
+        // в каком была до показа.
+        refresh();
+      }
+
+      // Язык даёт площадка, и он известен сразу: лежит в параметрах запуска страницы,
+      // ждать ответа SDK не нужно. У Яндекса язык приходил внутри ответа SDK
+      // (sdk.environment.i18n.lang), и из-за этого вся настройка языка висела на колбэке.
+      function language() {
+        try {
+          var value = new URLSearchParams(window.location.search).get("vk_language");
+          return value || "";
+        } catch (error) {
+          return "";
+        }
+      }
+
+      // Подписка оформляется ОДИН РАЗ за запуск страницы. Вызов bridge.subscribe внутри
+      // показа — распространённая ошибка: обработчики накапливаются, и после второго
+      // ролика ответ приходит дважды.
+      //
+      // РЕКЛАМНЫХ событий здесь нет нарочно, и это не упущение. Документация метода
+      // разводит их с промисом по смыслу: промис даёт «result: true, если реклама БЫЛА
+      // ПОКАЗАНА», а VKWebAppShowNativeAdsResult всего лишь «сигнализирует, что параметры
+      // вызова были корректны и что библиотека ПЫТАЕТСЯ отобразить рекламу». То есть
+      // событие приходит в начале показа и тоже с result: true. Слушая его, мы выдавали бы
+      // награду и снимали паузу поверх идущего ролика — молча, без следа в логе.
+      function listen(api) {
+        api.subscribe(function (event) {
+          if (!event || !event.detail) return;
+
+          var type = event.detail.type;
+
+          // Окно игры спрятали, не закрыв страницу: игрок ушёл в меню ВК, в переписку,
+          // свернул приложение. Браузер при этом может ничего не заметить, и штатный
+          // OnApplicationPause в игру не приходит — партия продолжалась бы вслепую,
+          // а музыка играла бы поверх чужого разговора.
+          if (type === "VKWebAppViewHide") {
+            answer("OnViewHidden", "");
+            return;
+          }
+
+          if (type === "VKWebAppViewRestore") {
+            answer("OnViewRestored", "");
+
+            // Пока окно было спрятано, кадр мог сменить размер — а события resize
+            // при возврате может и не прийти.
+            if (typeof window.vkFit === "function") window.vkFit();
+          }
+        });
+      }
+
+      // Спросить площадку, есть ли готовые материалы, и заодно велеть их подгрузить.
+      // Правила требуют этой проверки именно для ролика за награду: «Если показать кнопку,
+      // когда материалов нет, пользователь ничего не увидит — то есть нажатие на кнопку
+      // ни к чему не приведёт».
+      //
+      // Зовётся при запуске, затем по таймеру и после каждого показа. По таймеру — потому
+      // что запрос материалов может не выполниться (слабая связь, сбой сети), а повторный
+      // вызов дёшев: новых материалов он не просит, пока предзагруженные не показаны.
+      function refresh() {
+        var api = bridge();
+        if (!api) return;
+
+        // Формат reward спрашиваем с тем же use_waterfall, с каким будем показывать:
+        // иначе проверка отвечала бы про другую рекламу.
+        api.send("VKWebAppCheckNativeAds", {
+          ad_format: "reward",
+          use_waterfall: false
+        }).then(function (data) {
+          answer("OnRewardAvailable", (data && data.result) ? "1" : "0");
+        }).catch(function (error) {
+          console.warn("Coloomns: проверка ролика за награду не удалась", error);
+          answer("OnRewardAvailable", "0");
+        });
+
+        // Межстраничную только предзагружаем: игра о её наличии не спрашивает, показ идёт
+        // по событию в игре, а нет материалов — SDK ответит отказом и игра пойдёт дальше.
+        api.send("VKWebAppCheckNativeAds", { ad_format: "interstitial" })
+           .catch(function () { });
+      }
+
+      function show(kind, format) {
+        var api = bridge();
+
+        if (!api || pending) {
+          // Показывать нечем, а ответить обязаны: игра ждёт и стоит на паузе.
+          if (kind === "interstitial") answer("OnFullscreenClosed", "");
+          else answer("OnRewardedFailed", "");
+          return;
+        }
+
+        pending = kind;
+
+        var request = { ad_format: format };
+
+        // use_waterfall подменяет ролик за награду межстраничной, когда ролика нет.
+        // Для награды это недопустимо: за неоплаченный показ пришло бы result: true.
+        // Для межстраничной подменять нечем, параметр не её.
+        if (format === "reward") request.use_waterfall = false;
+
+        // Ответ берём ТОЛЬКО из промиса: он один говорит про показ, а не про попытку
+        // (см. пояснение у listen). Заодно он привязан к своему вызову сам, поэтому
+        // ни request_id, ни сопоставление по нему не нужны — и request_id
+        // в документированном списке параметров не значится.
+        //
+        // Промис разрешается ровно один раз, так что и двойного ответа быть не может;
+        // finish со своей проверкой pending остаётся ради раннего отказа выше,
+        // когда показывать нечем.
+        api.send("VKWebAppShowNativeAds", request).then(function (data) {
+          finish(!!data && data.result === true);
+        }).catch(function (error) {
+          console.warn("Coloomns: вызов рекламы упал", error);
+          finish(false);
+        });
+      }
+
+      // ===== То, что зовёт мост =====
+
+      window.vkInit = function () {
+        var api = bridge();
+
+        if (!api) {
+          console.warn("Coloomns: SDK ВК не загрузился, играем без рекламы");
+          answer("OnSdkFailed", "");
+          return;
+        }
+
+        listen(api);
+
+        // Вне ВК скрипт SDK грузится, но VKWebAppInit не отвечает никогда: страница
+        // не встроена, отвечать некому. Поэтому срок ожидания, а не ожидание ответа
+        // навсегда, — иначе на чужом хостинге и в предпросмотре игра осталась бы
+        // без языка и без разрешения показывать рекламу.
+        var settled = false;
+
+        var timer = setTimeout(function () {
+          if (settled) return;
+          settled = true;
+          console.warn("Coloomns: ВК не ответил за " + INIT_TIMEOUT + " мс — играем без рекламы");
+          answer("OnSdkFailed", "");
+        }, INIT_TIMEOUT);
+
+        api.send("VKWebAppInit", {}).then(function () {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          answer("OnSdkReady", language());
+
+          refresh();
+          setInterval(refresh, CHECK_EVERY);
+        }).catch(function (error) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          console.warn("Coloomns: инициализация SDK не удалась", error);
+          answer("OnSdkFailed", "");
+        });
+      };
+
+      window.vkShowInterstitial = function () {
+        show("interstitial", "interstitial");
+      };
+
+      window.vkShowRewarded = function () {
+        show("rewarded", "reward");
+      };
+    })();
+  </script>
+
+</body>
+</html>
