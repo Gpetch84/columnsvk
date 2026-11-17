@@ -590,6 +590,61 @@
         });
       };
 
+      // --- облачные сохранения ----------------------------------------------------
+      //
+      // Требование правил ВК, пункт 2.3.8: прогресс игрока должен быть общим между
+      // версиями на разных платформах. У нас это значит одно и то же сохранение
+      // в приложении ВК на телефоне и в браузере на компьютере: хранилище привязано
+      // к аккаунту, а не к устройству.
+      //
+      // Весь прогресс кладётся ОДНОЙ строкой под одним ключом. Так сделано потому,
+      // что прогресса мало (рекорд и пять переключателей), а каждый лишний ключ —
+      // лишнее обращение к площадке. Значение у VKWebAppStorageSet строковое,
+      // поэтому игра собирает и разбирает строку сама.
+      //
+      // Ключи хранилища живут год с последнего обращения. Для рекорда этого довольно:
+      // игрок, не заходивший год, начнёт заново — и это честнее, чем обещать вечность.
+
+      var STORAGE_KEY = "coloomns";
+
+      window.vkStorageGet = function () {
+        var api = bridge();
+
+        if (!api) {
+          answer("OnStorageMissing", "");
+          return;
+        }
+
+        // keys — массив, даже когда ключ один: таков метод. Ответ читается как
+        // data.keys[0].value; пустая строка значит «ничего не сохранено».
+        api.send("VKWebAppStorageGet", { keys: [STORAGE_KEY] }).then(function (data) {
+          var value = "";
+
+          if (data && data.keys && data.keys.length > 0 && data.keys[0]) {
+            value = data.keys[0].value || "";
+          }
+
+          if (value) answer("OnStorageLoaded", value);
+          else answer("OnStorageMissing", "");
+        }).catch(function (error) {
+          // Отказ хранилища — не беда: играем на местном сохранении, как раньше.
+          console.warn("Coloomns: хранилище ВК не ответило", error);
+          answer("OnStorageMissing", "");
+        });
+      };
+
+      window.vkStorageSet = function (value) {
+        var api = bridge();
+        if (!api) return;
+
+        api.send("VKWebAppStorageSet", { key: STORAGE_KEY, value: value || "" })
+          .catch(function (error) {
+            // Молча: запись прогресса не должна мешать игре. Местное сохранение уже
+            // сделано, в облако попадёт при следующей попытке.
+            console.warn("Coloomns: запись в хранилище ВК не удалась", error);
+          });
+      };
+
       window.vkShowInterstitial = function () {
         show("interstitial", "interstitial");
       };
